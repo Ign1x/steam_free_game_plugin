@@ -1,0 +1,10 @@
+name: steam_free_game
+desc: 自动抓取 Steam 促销信息，发现限时免费（-100%）时推送到白名单群聊/私聊。
+help: |
+  指令：
+  /steamfree_check  手动检查一次
+  /steamfree_sub    将当前会话加入推送白名单（写入 subscriptions.json）
+  /steamfree_unsub  将当前会话移出推送白名单
+  /steamfree_status 查看状态
+version: v0.1.0
+author: codex

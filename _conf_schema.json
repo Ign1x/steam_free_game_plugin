@@ -1,0 +1,76 @@
+{
+  "enabled": {
+    "description": "是否启用自动检查与推送",
+    "type": "bool",
+    "default": true
+  },
+  "check_interval_seconds": {
+    "description": "自动检查间隔（秒）",
+    "type": "int",
+    "default": 1800,
+    "hint": "建议 >= 300，避免过于频繁访问 Steam"
+  },
+  "steam_cc": {
+    "description": "Steam 商店地区（cc 参数），影响价格/货币显示",
+    "type": "string",
+    "default": "CN",
+    "hint": "例如：US / CN / HK / JP"
+  },
+  "steam_language": {
+    "description": "Steam 商店语言（l 参数）",
+    "type": "string",
+    "default": "schinese",
+    "hint": "例如：schinese / english / japanese"
+  },
+  "page_size": {
+    "description": "每次抓取条数（Steam search/results 的 count）",
+    "type": "int",
+    "default": 50
+  },
+  "max_pages": {
+    "description": "最多翻页数（从 start=0 起，每页 page_size）",
+    "type": "int",
+    "default": 3
+  },
+  "targets_text": {
+    "description": "静态推送白名单（每行一个 unified_msg_origin）",
+    "type": "text",
+    "default": "",
+    "hint": "示例：aiocqhttp:GroupMessage:123456789 或 satori_1:FriendMessage:987654321"
+  },
+  "enable_subscribe_commands": {
+    "description": "是否启用 /steamfree_sub 和 /steamfree_unsub（动态白名单写入 subscriptions.json）",
+    "type": "bool",
+    "default": true
+  },
+  "include_image": {
+    "description": "通知消息是否附带游戏图片",
+    "type": "bool",
+    "default": true
+  },
+  "workflow_path_mode": {
+    "description": "workflow.csv 存放位置：plugin_dir（插件目录）或 plugin_data（数据目录）",
+    "type": "string",
+    "default": "plugin_dir",
+    "options": [
+      "plugin_dir",
+      "plugin_data"
+    ],
+    "hint": "若插件目录不可写，改为 plugin_data"
+  },
+  "force_ipv4": {
+    "description": "强制使用 IPv4（可规避部分环境 IPv6 连接超时）",
+    "type": "bool",
+    "default": true
+  },
+  "request_timeout_seconds": {
+    "description": "网络请求超时（秒）",
+    "type": "int",
+    "default": 20
+  },
+  "request_retries": {
+    "description": "请求失败重试次数",
+    "type": "int",
+    "default": 2
+  }
+}
