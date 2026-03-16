@@ -1,23 +1,20 @@
 import asyncio
 import csv
 import json
-import logging
 import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import aiohttp
 
+from astrbot.api import logger
 import astrbot.api.message_components as Comp
-from astrbot.api.event import filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
-from astrbot.api.typing import AstrMessageEvent, MessageEventResult
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
-LOG = logging.getLogger("steam_free_game")
 
 
 def _utc_now_iso() -> str:
@@ -322,7 +319,7 @@ class SteamFreeGamePlugin(Star):
             except asyncio.CancelledError:
                 pass
             except Exception:
-                LOG.exception("loop task terminated with error")
+                logger.exception("loop task terminated with error")
         if self._session:
             await self._session.close()
             self._session = None
@@ -354,7 +351,7 @@ class SteamFreeGamePlugin(Star):
             except asyncio.CancelledError:
                 raise
             except Exception:
-                LOG.exception("auto check failed")
+                logger.exception("auto check failed")
 
             interval = int(self.config.get("check_interval_seconds", 1800))
             interval = max(30, interval)
@@ -524,24 +521,26 @@ class SteamFreeGamePlugin(Star):
             f"现价：{deal.final_price}",
             f"购买链接：{deal.store_url}",
         ]
-        chain: List[Any] = [Comp.Plain("\n".join(lines))]
+        chain = [Comp.Plain("\n".join(lines))]
         if bool(self.config.get("include_image", True)) and deal.image_url:
             chain.append(Comp.Image.fromURL(deal.image_url))
-        await self.context.send_message(unified_msg_origin, chain)
+        msg = MessageChain()
+        msg.chain = chain
+        await self.context.send_message(unified_msg_origin, msg)
 
     @filter.command("steamfree_check")
-    async def cmd_check(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def cmd_check(self, event: AstrMessageEvent):
         await self.check_and_notify()
-        return event.plain_result("已触发检查。")
+        yield event.plain_result("已触发检查。")
 
     @filter.command("steamfree_status")
-    async def cmd_status(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def cmd_status(self, event: AstrMessageEvent):
         targets = self._effective_targets()
         workflow_path = str(self._workflow_path())
         last_check = self._last_check_at or "N/A"
         enabled = bool(self.config.get("enabled", True))
         interval = int(self.config.get("check_interval_seconds", 1800))
-        return event.plain_result(
+        yield event.plain_result(
             "\n".join(
                 [
                     f"enabled={enabled}",
@@ -554,34 +553,39 @@ class SteamFreeGamePlugin(Star):
         )
 
     @filter.command("steamfree_sub")
-    async def cmd_subscribe(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def cmd_subscribe(self, event: AstrMessageEvent):
         if not bool(self.config.get("enable_subscribe_commands", True)):
-            return event.plain_result("订阅功能未启用（enable_subscribe_commands=false）。")
+            yield event.plain_result("订阅功能未启用（enable_subscribe_commands=false）。")
+            return
 
         target = (event.unified_msg_origin or "").strip()
         if not target:
-            return event.plain_result("无法获取当前会话 unified_msg_origin。")
+            yield event.plain_result("无法获取当前会话 unified_msg_origin。")
+            return
 
         subs = self._load_subscriptions()
         if target in subs:
-            return event.plain_result("当前会话已在白名单中。")
+            yield event.plain_result("当前会话已在白名单中。")
+            return
         subs.append(target)
         self._save_subscriptions(subs)
-        return event.plain_result(f"已加入推送白名单：{target}")
+        yield event.plain_result(f"已加入推送白名单：{target}")
 
     @filter.command("steamfree_unsub")
-    async def cmd_unsubscribe(self, event: AstrMessageEvent) -> MessageEventResult:
+    async def cmd_unsubscribe(self, event: AstrMessageEvent):
         if not bool(self.config.get("enable_subscribe_commands", True)):
-            return event.plain_result("订阅功能未启用（enable_subscribe_commands=false）。")
+            yield event.plain_result("订阅功能未启用（enable_subscribe_commands=false）。")
+            return
 
         target = (event.unified_msg_origin or "").strip()
         if not target:
-            return event.plain_result("无法获取当前会话 unified_msg_origin。")
+            yield event.plain_result("无法获取当前会话 unified_msg_origin。")
+            return
 
         subs = self._load_subscriptions()
         if target not in subs:
-            return event.plain_result("当前会话不在白名单中。")
+            yield event.plain_result("当前会话不在白名单中。")
+            return
         subs = [x for x in subs if x != target]
         self._save_subscriptions(subs)
-        return event.plain_result(f"已移出推送白名单：{target}")
-
+        yield event.plain_result(f"已移出推送白名单：{target}")
