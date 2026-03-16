@@ -20,6 +20,16 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _parse_iso_datetime(value: str) -> Optional[datetime]:
+    try:
+        dt = datetime.fromisoformat(value)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _parse_lines(text: str) -> List[str]:
     lines: List[str] = []
     for raw in (text or "").splitlines():
@@ -520,14 +530,14 @@ class SteamFreeGamePlugin(Star):
                 "new": 0,
                 "notified_deals": 0,
                 "send_errors": 0,
+                "cleaned": 0,
             }
-            if not deals:
-                return summary
 
             workflow = WorkflowCSVStore(self._workflow_path())
             workflow.ensure_exists()
             rows = workflow.load()
 
+            current_keys = {d.deal_key for d in deals}
             for deal in deals:
                 workflow.upsert_seen(rows, deal, now_iso)
                 notified_at = (rows.get(deal.deal_key, {}).get("notified_at") or "").strip()
@@ -549,8 +559,49 @@ class SteamFreeGamePlugin(Star):
                     workflow.mark_notified(rows, deal.deal_key, now_iso, ok_targets)
                     summary["notified_deals"] += 1
 
+            summary["cleaned"] = self._cleanup_not_free(rows, current_keys, now_iso)
             workflow.save(rows)
             return summary
+
+    def _cleanup_not_free(
+        self, rows: Dict[str, Dict[str, str]], current_keys: set[str], now_iso: str
+    ) -> int:
+        hours = int(self.config.get("cleanup_not_free_after_hours", 6))
+        if hours < 0:
+            return 0
+        grace_seconds = hours * 3600
+        mode = str(self.config.get("cleanup_mode") or "delete").strip().lower()
+
+        now_dt = _parse_iso_datetime(now_iso)
+        if not now_dt:
+            return 0
+
+        cleaned = 0
+        for deal_key, row in list(rows.items()):
+            if deal_key in current_keys:
+                continue
+            notified_at = (row.get("notified_at") or "").strip()
+            if not notified_at:
+                continue
+
+            last_seen_at = (row.get("last_seen_at") or "").strip() or notified_at
+            last_dt = _parse_iso_datetime(last_seen_at) or _parse_iso_datetime(notified_at)
+            if not last_dt:
+                continue
+
+            age_s = (now_dt - last_dt).total_seconds()
+            if age_s < grace_seconds:
+                continue
+
+            if mode == "reset":
+                row["notified_at"] = ""
+                row["notified_targets"] = ""
+                row["status"] = "expired"
+                rows[deal_key] = row
+            else:
+                rows.pop(deal_key, None)
+            cleaned += 1
+        return cleaned
 
     async def _send_deal(self, unified_msg_origin: str, deal: SteamFreebie) -> None:
         lines = [
@@ -586,6 +637,7 @@ class SteamFreeGamePlugin(Star):
             f"已推送{summary['notified_deals']}个，"
             f"目标{summary['targets']}个，"
             f"发送错误{summary['send_errors']}次。"
+            f"已清理{summary.get('cleaned', 0)}条过期记录。"
         )
 
     @filter.command("steamfree_status")
@@ -595,11 +647,15 @@ class SteamFreeGamePlugin(Star):
         last_check = self._last_check_at or "N/A"
         enabled = bool(self.config.get("enabled", True))
         interval = int(self.config.get("check_interval_seconds", 1800))
+        cleanup_hours = int(self.config.get("cleanup_not_free_after_hours", 6))
+        cleanup_mode = str(self.config.get("cleanup_mode") or "delete").strip()
         yield event.plain_result(
             "\n".join(
                 [
                     f"enabled={enabled}",
                     f"check_interval_seconds={interval}",
+                    f"cleanup_not_free_after_hours={cleanup_hours}",
+                    f"cleanup_mode={cleanup_mode}",
                     f"targets={len(targets)}",
                     f"workflow={workflow_path}",
                     f"last_check_at={last_check}",

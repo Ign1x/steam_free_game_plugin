@@ -65,6 +65,21 @@
     "type": "bool",
     "default": true
   },
+  "cleanup_not_free_after_hours": {
+    "description": "已推送条目在不再免费后多久清理（小时）",
+    "type": "int",
+    "default": 6,
+    "hint": "用于支持同一游戏未来再次限免时重新推送；建议 >= 1 以避免因偶发抓取异常导致重复推送"
+  },
+  "cleanup_mode": {
+    "description": "清理方式：delete 删除记录 / reset 仅重置通知状态",
+    "type": "string",
+    "default": "delete",
+    "options": [
+      "delete",
+      "reset"
+    ]
+  },
   "workflow_path_mode": {
     "description": "workflow.csv 存放位置：plugin_dir（插件目录）或 plugin_data（数据目录）",
     "type": "string",

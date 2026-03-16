@@ -33,3 +33,9 @@
 
 - `workflow.csv`：工作流/去重状态表（动态更新；默认写入 `data/plugin_data/<plugin>/workflow.csv`）
 - `subscriptions.json`：动态白名单（由订阅指令维护，位于 `data/plugin_data/<plugin>/`）
+
+## 去重与过期清理
+
+插件会把“已推送过”的游戏记录在 `workflow.csv` 里，用于避免在限免期间重复刷屏。
+
+当游戏 **不再免费** 后，会在配置的 `cleanup_not_free_after_hours`（默认 6 小时）后自动清理该条记录（默认 `cleanup_mode=delete`），以便同一游戏未来再次限免时仍然可以再次推送。
