@@ -32,10 +32,27 @@
     "type": "int",
     "default": 3
   },
+  "push_platform_name": {
+    "description": "推送的平台名称（unified_msg_origin 的 platform_name）",
+    "type": "string",
+    "default": "aiocqhttp",
+    "hint": "常见：aiocqhttp；如果你用 Satori，可能是 satori_1（以 /steamfree_sub 保存的 platform 名为准）"
+  },
+  "static_group_ids": {
+    "description": "静态推送白名单：QQ群号列表（只填群号）",
+    "type": "list",
+    "default": []
+  },
+  "static_user_ids": {
+    "description": "静态推送白名单：QQ号列表（只填 QQ 号/用户号）",
+    "type": "list",
+    "default": []
+  },
   "targets_text": {
-    "description": "静态推送白名单（每行一个 unified_msg_origin）",
+    "description": "（兼容旧版）静态推送白名单（每行一个 unified_msg_origin）",
     "type": "text",
     "default": "",
+    "invisible": true,
     "hint": "示例：aiocqhttp:GroupMessage:123456789 或 satori_1:FriendMessage:987654321"
   },
   "enable_subscribe_commands": {
@@ -51,7 +68,7 @@
   "workflow_path_mode": {
     "description": "workflow.csv 存放位置：plugin_dir（插件目录）或 plugin_data（数据目录）",
     "type": "string",
-    "default": "plugin_dir",
+    "default": "plugin_data",
     "options": [
       "plugin_dir",
       "plugin_data"

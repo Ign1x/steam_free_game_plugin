@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import aiohttp
 
 from astrbot.api import logger
-import astrbot.api.message_components as Comp
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
@@ -29,6 +28,23 @@ def _parse_lines(text: str) -> List[str]:
             continue
         lines.append(s)
     return lines
+
+
+def _coerce_id_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    out: List[str] = []
+    for item in value:
+        if item is None:
+            continue
+        if isinstance(item, int):
+            s = str(item)
+        else:
+            s = str(item).strip()
+        if not s:
+            continue
+        out.append(s)
+    return out
 
 
 @dataclass(frozen=True)
@@ -255,7 +271,7 @@ class SteamFreeGamePlugin(Star):
         return getattr(self, "name", None) or Path(__file__).resolve().parent.name
 
     def _plugin_data_dir(self) -> Path:
-        base = get_astrbot_data_path()
+        base = Path(get_astrbot_data_path())
         return base / "plugin_data" / self._plugin_name()
 
     def _workflow_path(self) -> Path:
@@ -292,7 +308,18 @@ class SteamFreeGamePlugin(Star):
 
     def _effective_targets(self) -> List[str]:
         targets: List[str] = []
+        platform_name = str(self.config.get("push_platform_name") or "").strip()
+        group_ids = _coerce_id_list(self.config.get("static_group_ids"))
+        user_ids = _coerce_id_list(self.config.get("static_user_ids"))
+        if platform_name:
+            for gid in group_ids:
+                targets.append(f"{platform_name}:GroupMessage:{gid}")
+            for uid in user_ids:
+                targets.append(f"{platform_name}:FriendMessage:{uid}")
+
+        # 兼容旧版：允许直接填写 unified_msg_origin（每行一个）
         targets.extend(_parse_lines(self.config.get("targets_text", "")))
+
         if bool(self.config.get("enable_subscribe_commands", True)):
             targets.extend(self._load_subscriptions())
 
@@ -479,26 +506,34 @@ class SteamFreeGamePlugin(Star):
             discount_percent=int(discount_percent),
         )
 
-    async def check_and_notify(self) -> None:
+    async def check_and_notify(self) -> Dict[str, Any]:
         async with self._check_lock:
             now_iso = _utc_now_iso()
             self._last_check_at = now_iso
 
             deals = await self._fetch_freebies_from_steam_search()
+            targets = self._effective_targets()
+            summary = {
+                "checked_at": now_iso,
+                "fetched": len(deals),
+                "targets": len(targets),
+                "new": 0,
+                "notified_deals": 0,
+                "send_errors": 0,
+            }
             if not deals:
-                return
+                return summary
 
             workflow = WorkflowCSVStore(self._workflow_path())
             workflow.ensure_exists()
             rows = workflow.load()
-
-            targets = self._effective_targets()
 
             for deal in deals:
                 workflow.upsert_seen(rows, deal, now_iso)
                 notified_at = (rows.get(deal.deal_key, {}).get("notified_at") or "").strip()
                 if notified_at:
                     continue
+                summary["new"] += 1
                 if not targets:
                     continue
 
@@ -508,11 +543,14 @@ class SteamFreeGamePlugin(Star):
                         await self._send_deal(t, deal)
                         ok_targets.append(t)
                     except Exception as e:
+                        summary["send_errors"] += 1
                         workflow.mark_error(rows, deal.deal_key, f"send to {t} failed: {e}")
                 if ok_targets:
                     workflow.mark_notified(rows, deal.deal_key, now_iso, ok_targets)
+                    summary["notified_deals"] += 1
 
             workflow.save(rows)
+            return summary
 
     async def _send_deal(self, unified_msg_origin: str, deal: SteamFreebie) -> None:
         lines = [
@@ -521,17 +559,34 @@ class SteamFreeGamePlugin(Star):
             f"现价：{deal.final_price}",
             f"购买链接：{deal.store_url}",
         ]
-        chain = [Comp.Plain("\n".join(lines))]
+        msg = MessageChain().message("\n".join(lines))
         if bool(self.config.get("include_image", True)) and deal.image_url:
-            chain.append(Comp.Image.fromURL(deal.image_url))
-        msg = MessageChain()
-        msg.chain = chain
-        await self.context.send_message(unified_msg_origin, msg)
+            msg.url_image(deal.image_url)
+        ok = await self.context.send_message(unified_msg_origin, msg)
+        if not ok:
+            raise RuntimeError(f"cannot find platform for session: {unified_msg_origin}")
 
     @filter.command("steamfree_check")
     async def cmd_check(self, event: AstrMessageEvent):
-        await self.check_and_notify()
-        yield event.plain_result("已触发检查。")
+        try:
+            summary = await self.check_and_notify()
+        except Exception as e:
+            logger.exception("manual check failed")
+            yield event.plain_result(f"检查失败：{e}")
+            return
+
+        if not summary:
+            yield event.plain_result("检查完成：未发现限时免费条目。")
+            return
+
+        yield event.plain_result(
+            "检查完成："
+            f"发现{summary['fetched']}个免费条目，"
+            f"新{summary['new']}个，"
+            f"已推送{summary['notified_deals']}个，"
+            f"目标{summary['targets']}个，"
+            f"发送错误{summary['send_errors']}次。"
+        )
 
     @filter.command("steamfree_status")
     async def cmd_status(self, event: AstrMessageEvent):
@@ -568,7 +623,12 @@ class SteamFreeGamePlugin(Star):
             yield event.plain_result("当前会话已在白名单中。")
             return
         subs.append(target)
-        self._save_subscriptions(subs)
+        try:
+            self._save_subscriptions(subs)
+        except Exception as e:
+            logger.exception("save subscriptions failed")
+            yield event.plain_result(f"写入 subscriptions.json 失败：{e}")
+            return
         yield event.plain_result(f"已加入推送白名单：{target}")
 
     @filter.command("steamfree_unsub")
@@ -587,5 +647,10 @@ class SteamFreeGamePlugin(Star):
             yield event.plain_result("当前会话不在白名单中。")
             return
         subs = [x for x in subs if x != target]
-        self._save_subscriptions(subs)
+        try:
+            self._save_subscriptions(subs)
+        except Exception as e:
+            logger.exception("save subscriptions failed")
+            yield event.plain_result(f"写入 subscriptions.json 失败：{e}")
+            return
         yield event.plain_result(f"已移出推送白名单：{target}")
