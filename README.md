@@ -21,13 +21,15 @@
 - `push_platform_name`: 推送平台 ID（`unified_msg_origin` 的第一段），一般为 `aiocqhttp`；Satori 可能是 `satori_1`
 - `check_interval_seconds`: 自动检查间隔（秒）
 - `workflow_path_mode`: `workflow.csv` 存放位置（默认 `plugin_data`，推荐）
+- `http_proxy`: HTTP 代理（留空则使用 AstrBot 全局 `http_proxy`）
 
 ## 指令
 
-- `/steamfree_check`：手动检查一次，并返回统计信息
+- `/steamfree_check`：手动检查一次（会先回复“开始检查”，完成后再发送统计信息）
 - `/steamfree_status`：查看当前状态
 - `/steamfree_sub`：将当前会话加入推送白名单（写入 `subscriptions.json`）
 - `/steamfree_unsub`：将当前会话移出推送白名单
+- `/steamfree_clear_history`：清空推送历史（仅 AstrBot 管理员可用）
 
 ## 文件说明
 

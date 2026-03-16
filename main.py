@@ -341,6 +341,40 @@ class SteamFreeGamePlugin(Star):
                 dedup.append(t)
         return dedup
 
+    def _get_http_proxy(self) -> str:
+        proxy = str(self.config.get("http_proxy") or "").strip()
+        if proxy:
+            return proxy
+        try:
+            core_cfg = self.context.get_config()
+            if hasattr(core_cfg, "get"):
+                return str(core_cfg.get("http_proxy") or "").strip()
+            return str(core_cfg["http_proxy"] or "").strip()
+        except Exception:
+            return ""
+
+    def _mask_proxy_for_status(self, proxy: str) -> str:
+        proxy = (proxy or "").strip()
+        if not proxy:
+            return "N/A"
+        if "@" in proxy:
+            return proxy.split("@", 1)[-1]
+        return proxy
+
+    def _is_astrbot_admin(self, event: AstrMessageEvent) -> bool:
+        uid = str(event.get_sender_id() or "").strip()
+        if not uid:
+            return False
+        try:
+            cfg = self.context.get_config()
+            if hasattr(cfg, "get"):
+                admins = cfg.get("admins_id", [])
+            else:
+                admins = cfg["admins_id"]
+        except Exception:
+            admins = []
+        return uid in {str(x).strip() for x in (admins or []) if str(x).strip()}
+
     async def initialize(self) -> None:
         self._stop_event = asyncio.Event()
         self._ensure_http_session()
@@ -405,11 +439,12 @@ class SteamFreeGamePlugin(Star):
         self._ensure_http_session()
         assert self._session is not None
 
+        proxy = self._get_http_proxy()
         retries = int(self.config.get("request_retries", 2))
         last_err: Optional[Exception] = None
         for _ in range(max(0, retries) + 1):
             try:
-                async with self._session.get(url, params=params) as resp:
+                async with self._session.get(url, params=params, proxy=(proxy or None)) as resp:
                     resp.raise_for_status()
                     return await resp.json()
             except Exception as e:
@@ -603,6 +638,29 @@ class SteamFreeGamePlugin(Star):
             cleaned += 1
         return cleaned
 
+    async def _manual_check_and_report(self, origin: str) -> None:
+        origin = (origin or "").strip()
+        if not origin:
+            return
+        try:
+            summary = await self.check_and_notify()
+            text = (
+                "检查完成："
+                f"发现{summary['fetched']}个免费条目，"
+                f"新{summary['new']}个，"
+                f"已推送{summary['notified_deals']}个，"
+                f"目标{summary['targets']}个，"
+                f"发送错误{summary['send_errors']}次，"
+                f"已清理{summary.get('cleaned', 0)}条过期记录。"
+            )
+        except Exception as e:
+            logger.exception("manual check failed")
+            text = f"检查失败：{e}\n可尝试在插件配置里设置 http_proxy。"
+
+        ok = await self.context.send_message(origin, MessageChain().message(text))
+        if not ok:
+            logger.warning("cannot find platform for session %s, manual check result not sent", origin)
+
     async def _send_deal(self, unified_msg_origin: str, deal: SteamFreebie) -> None:
         lines = [
             f"【Steam 限时免费】{deal.title}",
@@ -619,26 +677,13 @@ class SteamFreeGamePlugin(Star):
 
     @filter.command("steamfree_check")
     async def cmd_check(self, event: AstrMessageEvent):
-        try:
-            summary = await self.check_and_notify()
-        except Exception as e:
-            logger.exception("manual check failed")
-            yield event.plain_result(f"检查失败：{e}")
+        if self._check_lock.locked():
+            yield event.plain_result("已有检查任务正在运行中，请稍候再试。")
             return
 
-        if not summary:
-            yield event.plain_result("检查完成：未发现限时免费条目。")
-            return
-
-        yield event.plain_result(
-            "检查完成："
-            f"发现{summary['fetched']}个免费条目，"
-            f"新{summary['new']}个，"
-            f"已推送{summary['notified_deals']}个，"
-            f"目标{summary['targets']}个，"
-            f"发送错误{summary['send_errors']}次。"
-            f"已清理{summary.get('cleaned', 0)}条过期记录。"
-        )
+        origin = str(event.unified_msg_origin or "").strip()
+        yield event.plain_result("开始检查 Steam 限免…（网络较慢时可能需要几十秒，结果会稍后发送）")
+        asyncio.create_task(self._manual_check_and_report(origin))
 
     @filter.command("steamfree_status")
     async def cmd_status(self, event: AstrMessageEvent):
@@ -649,6 +694,8 @@ class SteamFreeGamePlugin(Star):
         interval = int(self.config.get("check_interval_seconds", 1800))
         cleanup_hours = int(self.config.get("cleanup_not_free_after_hours", 6))
         cleanup_mode = str(self.config.get("cleanup_mode") or "delete").strip()
+        proxy = self._mask_proxy_for_status(self._get_http_proxy())
+        running = self._check_lock.locked()
         yield event.plain_result(
             "\n".join(
                 [
@@ -656,6 +703,8 @@ class SteamFreeGamePlugin(Star):
                     f"check_interval_seconds={interval}",
                     f"cleanup_not_free_after_hours={cleanup_hours}",
                     f"cleanup_mode={cleanup_mode}",
+                    f"http_proxy={proxy}",
+                    f"check_running={running}",
                     f"targets={len(targets)}",
                     f"workflow={workflow_path}",
                     f"last_check_at={last_check}",
@@ -710,3 +759,18 @@ class SteamFreeGamePlugin(Star):
             yield event.plain_result(f"写入 subscriptions.json 失败：{e}")
             return
         yield event.plain_result(f"已移出推送白名单：{target}")
+
+    @filter.command("steamfree_clear_history")
+    async def cmd_clear_history(self, event: AstrMessageEvent):
+        """清空推送历史（仅 AstrBot 管理员）"""
+        if not self._is_astrbot_admin(event):
+            yield event.plain_result("权限不足：仅 AstrBot 管理员可使用。可用 /sid 查看 UID，用 /op 授权管理员。")
+            return
+
+        async with self._check_lock:
+            workflow = WorkflowCSVStore(self._workflow_path())
+            workflow.ensure_exists()
+            rows = workflow.load()
+            count = len(rows)
+            workflow.save({})
+        yield event.plain_result(f"已清空推送历史，共清理 {count} 条记录。")

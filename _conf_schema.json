@@ -100,6 +100,12 @@
     "type": "int",
     "default": 20
   },
+  "http_proxy": {
+    "description": "HTTP 代理（可选，留空则使用 AstrBot 全局 http_proxy）",
+    "type": "string",
+    "default": "",
+    "hint": "示例：http://127.0.0.1:7890（一般不支持 socks5，如需 socks 请自行扩展依赖）"
+  },
   "request_retries": {
     "description": "请求失败重试次数",
     "type": "int",
