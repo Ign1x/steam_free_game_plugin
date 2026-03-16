@@ -6,5 +6,5 @@ help: |
   /steamfree_sub    将当前会话加入推送白名单（写入 subscriptions.json）
   /steamfree_unsub  将当前会话移出推送白名单
   /steamfree_status 查看状态
-version: v0.1.0
+version: v0.1.1
 author: codex
